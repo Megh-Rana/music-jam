@@ -49,6 +49,7 @@ export default function App() {
   const isHost = room && clientId && room.hostId === clientId
   const isExtractMode = room?.mode === 'extract'
   const membersLabel = useMemo(() => (room ? `${room.members.length} listening` : ''), [room])
+  const coverThumb = room?.current?.thumbnail || ''
 
   useEffect(() => {
     roomRef.current = room
@@ -331,6 +332,39 @@ export default function App() {
     }
   }
 
+  const hostTogglePlayback = () => {
+    if (!isHost || !room?.current) return
+    if (isExtractMode) {
+      const audio = audioRef.current
+      if (!audio) return
+      if (audio.paused) audio.play().catch(() => null)
+      else audio.pause()
+      return
+    }
+    const player = iframePlayerRef.current
+    if (!player?.getPlayerState) return
+    if (isPlayingState(player.getPlayerState())) player.pauseVideo()
+    else player.playVideo()
+  }
+
+  const hostSeekBy = (deltaSec) => {
+    if (!isHost || !room?.current) return
+    if (isExtractMode) {
+      const audio = audioRef.current
+      if (!audio) return
+      const next = Math.max(0, Number(audio.currentTime || 0) + deltaSec)
+      audio.currentTime = next
+      emitPlayback(room.current.videoId, audio.paused ? 'paused' : 'playing', next, true)
+      return
+    }
+    const player = iframePlayerRef.current
+    if (!player?.getCurrentTime) return
+    const next = Math.max(0, Number(player.getCurrentTime() || 0) + deltaSec)
+    player.seekTo(next, true)
+    const status = isPlayingState(player.getPlayerState?.()) ? 'playing' : 'paused'
+    emitPlayback(room.current.videoId, status, next, true)
+  }
+
   if (!room) {
     return (
       <main className="page page-center">
@@ -365,11 +399,20 @@ export default function App() {
       </header>
       <section className="layout">
         <div className="panel player-panel">
-          <div className="player-shell">{isExtractMode ? <audio className="audio-player" ref={audioRef} controls={isHost} /> : <div className="player" ref={playerHostRef}></div>}</div>
+          <div className="player-shell">
+            {coverThumb ? <img className="cover-art" src={coverThumb} alt="Current track" /> : <div className="cover-art fallback" />}
+            {isExtractMode ? <audio className="audio-player" ref={audioRef} controls={isHost} /> : <div className="player hidden-player" ref={playerHostRef}></div>}
+          </div>
           <div className="player-meta"><h3>{room.current?.title || 'Queue a song to start'}</h3><p>{room.current ? `Added by ${room.current.addedBy}` : 'Paste a YouTube link below'}</p></div>
           <div className="row wrap">
-            <button className="btn" onClick={() => send({ type: 'sync:request' })}>Resync</button>
-            {isHost ? <button className="btn btn-primary" onClick={() => send({ type: 'player:next' })}>Next song</button> : null}
+            {isHost ? (
+              <>
+                <button className="btn" onClick={() => hostSeekBy(-10)}>-10s</button>
+                <button className="btn" onClick={hostTogglePlayback}>{room.playback?.status === 'playing' ? 'Pause' : 'Play'}</button>
+                <button className="btn" onClick={() => hostSeekBy(10)}>+10s</button>
+                <button className="btn btn-primary" onClick={() => send({ type: 'player:next' })}>Next song</button>
+              </>
+            ) : null}
           </div>
         </div>
         <div className="panel">
@@ -389,18 +432,20 @@ export default function App() {
           <div className="result-list">{recommendations.map((item) => <button key={`rec-${item.videoId}`} className="result" onClick={() => addResolvedSong(item)}><img src={item.thumbnail} alt="" /><span>{item.title}</span></button>)}</div>
         </div>
         <div className="panel queue-panel">
-          <div className="row between"><h3>Queue</h3><button className="btn" onClick={() => send({ type: 'queue:mix' })}>Mix</button></div>
+          <div className="row between"><h3>Queue</h3>{isHost ? <button className="btn" onClick={() => send({ type: 'queue:mix' })}>Mix</button> : null}</div>
           <div className="queue-list">
             {room.queue.length === 0 ? <p className="meta">Queue is empty</p> : null}
             {room.queue.map((item, index) => (
               <article className="queue-item" key={item.id}>
                 <img src={item.thumbnail} alt="" />
                 <div><p>{item.title}</p><small>by {item.addedBy}</small></div>
-                <div className="item-controls">
-                  <button className="btn mini" onClick={() => send({ type: 'queue:move', from: index, to: index - 1 })}>↑</button>
-                  <button className="btn mini" onClick={() => send({ type: 'queue:move', from: index, to: index + 1 })}>↓</button>
-                  <button className="btn mini" onClick={() => send({ type: 'queue:remove', id: item.id })}>✕</button>
-                </div>
+                {isHost ? (
+                  <div className="item-controls">
+                    <button className="btn mini" onClick={() => send({ type: 'queue:move', from: index, to: index - 1 })}>↑</button>
+                    <button className="btn mini" onClick={() => send({ type: 'queue:move', from: index, to: index + 1 })}>↓</button>
+                    <button className="btn mini" onClick={() => send({ type: 'queue:remove', id: item.id })}>✕</button>
+                  </div>
+                ) : null}
               </article>
             ))}
           </div>
