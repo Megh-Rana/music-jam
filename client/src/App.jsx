@@ -30,7 +30,6 @@ export default function App() {
   const roomRef = useRef(null)
   const isHostRef = useRef(false)
   const lastPlaybackEmitRef = useRef({ videoId: null, status: null, positionSec: 0, at: 0 })
-  const autoplayHintRef = useRef(false)
 
   const [name, setName] = useState('')
   const [joinCode, setJoinCode] = useState('')
@@ -48,7 +47,7 @@ export default function App() {
 
   const isHost = room && clientId && room.hostId === clientId
   const isExtractMode = room?.mode === 'extract'
-  const membersLabel = useMemo(() => (room ? `${room.members.length} listening` : ''), [room])
+  const membersLabel = useMemo(() => (room ? `${room.members.length} live` : ''), [room])
   const coverThumb = room?.current?.thumbnail || ''
 
   useEffect(() => {
@@ -56,21 +55,21 @@ export default function App() {
     isHostRef.current = Boolean(isHost)
   }, [room, isHost])
 
-  const emitPlayback = (videoId, status, positionSec, force = false) => {
+  const send = (payload) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(payload))
+  }
+
+  const emitPlayback = (videoId, nextStatus, positionSec, force = false) => {
     if (!videoId) return
     const now = Date.now()
     const last = lastPlaybackEmitRef.current
     const changedVideo = last.videoId !== videoId
-    const changedStatus = last.status !== status
+    const changedStatus = last.status !== nextStatus
     const jumped = Math.abs((last.positionSec || 0) - (positionSec || 0)) > 1.1
     const stale = now - (last.at || 0) > 1800
     if (!force && !changedVideo && !changedStatus && !jumped && !stale) return
-    send({ type: 'playback:update', playback: { videoId, status, positionSec } })
-    lastPlaybackEmitRef.current = { videoId, status, positionSec, at: now }
-  }
-
-  const send = (payload) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(payload))
+    send({ type: 'playback:update', playback: { videoId, status: nextStatus, positionSec } })
+    lastPlaybackEmitRef.current = { videoId, status: nextStatus, positionSec, at: now }
   }
 
   const connectWs = (roomCode, cid, displayName) => {
@@ -108,12 +107,11 @@ export default function App() {
       iframePlayerRef.current = new window.YT.Player(playerHostRef.current, {
         width: '100%',
         height: '100%',
-        playerVars: { controls: 1, rel: 0, modestbranding: 1, iv_load_policy: 3 },
+        playerVars: { controls: 0, rel: 0, modestbranding: 1, iv_load_policy: 3, disablekb: 1 },
         events: {
           onStateChange: (event) => {
             const latestRoom = roomRef.current
-            if (!latestRoom?.current) return
-            if (!isHostRef.current) return
+            if (!latestRoom?.current || !isHostRef.current) return
             const p = iframePlayerRef.current
             if (!p?.getCurrentTime) return
             const positionSec = Number(p.getCurrentTime() || 0)
@@ -153,7 +151,6 @@ export default function App() {
     if (!player?.getPlayerState) return
     const playback = room.playback
     const videoId = room.current.videoId
-    const state = player.getPlayerState()
     const loadedId = player.getVideoData?.().video_id
     if (loadedId !== videoId) {
       if (playback.status === 'playing') player.loadVideoById({ videoId, startSeconds: playback.positionSec || 0 })
@@ -166,13 +163,8 @@ export default function App() {
       : (playback.positionSec || 0)
     const current = Number(player.getCurrentTime?.() || 0)
     if (Math.abs(current - expected) > 2.2) player.seekTo(expected, true)
-    if (playback.status === 'playing' && !isPlayingState(state)) {
-      player.playVideo()
-      if (!isHost && !autoplayHintRef.current) {
-        autoplayHintRef.current = true
-        setStatus('If audio does not start, tap the player once to enable playback.')
-      }
-    }
+    const state = player.getPlayerState()
+    if (playback.status === 'playing' && !isPlayingState(state)) player.playVideo()
     if (playback.status === 'paused' && isPlayingState(state)) player.pauseVideo()
   }, [isExtractMode, room])
 
@@ -214,19 +206,19 @@ export default function App() {
     syncTimerRef.current = setInterval(() => {
       if (!room.current) return
       let positionSec = 0
-      let status = 'paused'
+      let nextStatus = 'paused'
       if (isExtractMode) {
         const audio = audioRef.current
         if (!audio) return
         positionSec = Number(audio.currentTime || 0)
-        status = audio.paused ? 'paused' : 'playing'
+        nextStatus = audio.paused ? 'paused' : 'playing'
       } else {
         const p = iframePlayerRef.current
         if (!p?.getCurrentTime) return
         positionSec = Number(p.getCurrentTime() || 0)
-        status = isPlayingState(p.getPlayerState?.()) ? 'playing' : 'paused'
+        nextStatus = isPlayingState(p.getPlayerState?.()) ? 'playing' : 'paused'
       }
-      emitPlayback(room.current.videoId, status, positionSec)
+      emitPlayback(room.current.videoId, nextStatus, positionSec)
     }, 400)
     return () => {
       if (syncTimerRef.current) clearInterval(syncTimerRef.current)
@@ -275,9 +267,7 @@ export default function App() {
   const createRoom = async () => {
     const displayName = clampName(name)
     const res = await fetch(`${SERVER_URL}/api/room/create`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: displayName, mode: roomMode }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: displayName, mode: roomMode }),
     })
     const data = await res.json()
     if (!res.ok || !data.ok) return setStatus(data.error || 'Failed to create room')
@@ -323,7 +313,6 @@ export default function App() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Search failed')
       setSearchItems(data.items || [])
-      setStatus(`Found ${data.items?.length || 0} songs`)
     } catch (error) {
       setStatus(error.message)
       setSearchItems([])
@@ -361,18 +350,23 @@ export default function App() {
     if (!player?.getCurrentTime) return
     const next = Math.max(0, Number(player.getCurrentTime() || 0) + deltaSec)
     player.seekTo(next, true)
-    const status = isPlayingState(player.getPlayerState?.()) ? 'playing' : 'paused'
-    emitPlayback(room.current.videoId, status, next, true)
+    const nextStatus = isPlayingState(player.getPlayerState?.()) ? 'playing' : 'paused'
+    emitPlayback(room.current.videoId, nextStatus, next, true)
   }
 
   if (!room) {
     return (
-      <main className="page page-center">
-        <section className="auth-card">
-          <p className="eyebrow">music-jam</p>
-          <h1>Jam in sync with friends</h1>
-          <p className="subtext">Create a room, share a code, and build one queue together.</p>
-          <label>Display name<input value={name} onChange={(e) => setName(e.target.value)} placeholder="NeonTiger" /></label>
+      <main className="entry-screen">
+        <header className="entry-topbar">
+          <h1>MUSIC JAM</h1>
+        </header>
+        <section className="entry-hero">
+          <h2>JAM TOGETHER</h2>
+          <p>Real-time collaborative queue for shared listening sessions.</p>
+          <label>
+            Display name
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="NeonTiger" />
+          </label>
           <label>
             Playback mode
             <select value={roomMode} onChange={(e) => setRoomMode(e.target.value)}>
@@ -380,10 +374,12 @@ export default function App() {
               <option value="extract" disabled={!extractionEnabled}>Personal mode (yt-dlp audio)</option>
             </select>
           </label>
-          <div className="row"><button className="btn btn-primary" onClick={createRoom}>Create Room</button></div>
-          <div className="join-block">
-            <input value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} placeholder="ROOM CODE" maxLength={6} />
-            <button className="btn" onClick={joinRoom}>Join</button>
+          <div className="entry-actions">
+            <button className="cta" onClick={createRoom}>Create a Jam Room</button>
+            <div className="join-inline">
+              <input value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} placeholder="Join with Code" maxLength={6} />
+              <button onClick={joinRoom}>→</button>
+            </div>
           </div>
           {status ? <p className="status">{status}</p> : null}
         </section>
@@ -392,66 +388,87 @@ export default function App() {
   }
 
   return (
-    <main className="page">
-      <header className="topbar">
-        <div><p className="eyebrow">Room {room.roomCode} - {room.mode}</p><h2>Now jamming</h2></div>
-        <div><p className="meta">{membersLabel}</p><p className="meta">{isHost ? 'You are host' : 'Listener mode'}</p></div>
+    <main className="app-shell">
+      <header className="topbar-brutal">
+        <h1>MUSIC JAM</h1>
+        <p>#{room.roomCode} · {membersLabel}</p>
       </header>
-      <section className="layout">
-        <div className="panel player-panel">
-          <div className="player-shell">
+
+      <section className="player-grid">
+        <article className="now-playing">
+          <div className="cover-wrap">
             {coverThumb ? <img className="cover-art" src={coverThumb} alt="Current track" /> : <div className="cover-art fallback" />}
             {isExtractMode ? <audio className="audio-player" ref={audioRef} controls={isHost} /> : <div className="player hidden-player" ref={playerHostRef}></div>}
           </div>
-          <div className="player-meta"><h3>{room.current?.title || 'Queue a song to start'}</h3><p>{room.current ? `Added by ${room.current.addedBy}` : 'Paste a YouTube link below'}</p></div>
-          <div className="row wrap">
-            {isHost ? (
-              <>
-                <button className="btn" onClick={() => hostSeekBy(-10)}>-10s</button>
-                <button className="btn" onClick={hostTogglePlayback}>{room.playback?.status === 'playing' ? 'Pause' : 'Play'}</button>
-                <button className="btn" onClick={() => hostSeekBy(10)}>+10s</button>
-                <button className="btn btn-primary" onClick={() => send({ type: 'player:next' })}>Next song</button>
-              </>
-            ) : null}
+          <h2>{room.current?.title || 'Queue a song to start'}</h2>
+          <p>{room.current ? `Added by ${room.current.addedBy}` : 'Paste a YouTube URL below'}</p>
+          {isHost ? (
+            <div className="host-controls">
+              <button onClick={() => hostSeekBy(-10)}>-10s</button>
+              <button onClick={hostTogglePlayback}>{room.playback?.status === 'playing' ? 'Pause' : 'Play'}</button>
+              <button onClick={() => hostSeekBy(10)}>+10s</button>
+              <button className="primary" onClick={() => send({ type: 'player:next' })}>Next</button>
+            </div>
+          ) : null}
+        </article>
+
+        <article className="search-panel">
+          <h3>Find Your Sound</h3>
+          <div className="search-row">
+            <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Track, artist, or genre" />
+            <button onClick={searchSongs} disabled={loadingSearch || !searchEnabled}>{loadingSearch ? '...' : 'Search'}</button>
           </div>
-        </div>
-        <div className="panel">
-          <h3>Add song</h3>
-          <p className="meta">Paste YouTube URL or ID</p>
-          <div className="join-block">
-            <input value={songInput} onChange={(e) => setSongInput(e.target.value)} placeholder="https://youtube.com/watch?v=..." />
-            <button className="btn btn-primary" onClick={addByUrl}>Add</button>
-          </div>
-          <h3 className="spaced">Search</h3>
-          <div className="join-block">
-            <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder={searchEnabled ? 'Search YouTube songs' : 'Enable API key for search'} />
-            <button className="btn" onClick={searchSongs} disabled={loadingSearch || !searchEnabled}>{loadingSearch ? '...' : 'Find'}</button>
-          </div>
-          <div className="result-list">{searchItems.map((item) => <button key={item.videoId} className="result" onClick={() => addResolvedSong(item)}><img src={item.thumbnail} alt="" /><span>{item.title}</span></button>)}</div>
-          <h3 className="spaced">Recommendations</h3>
-          <div className="result-list">{recommendations.map((item) => <button key={`rec-${item.videoId}`} className="result" onClick={() => addResolvedSong(item)}><img src={item.thumbnail} alt="" /><span>{item.title}</span></button>)}</div>
-        </div>
-        <div className="panel queue-panel">
-          <div className="row between"><h3>Queue</h3>{isHost ? <button className="btn" onClick={() => send({ type: 'queue:mix' })}>Mix</button> : null}</div>
-          <div className="queue-list">
-            {room.queue.length === 0 ? <p className="meta">Queue is empty</p> : null}
-            {room.queue.map((item, index) => (
-              <article className="queue-item" key={item.id}>
+          <div className="list">
+            {searchItems.map((item) => (
+              <button key={item.videoId} className="list-item" onClick={() => addResolvedSong(item)}>
                 <img src={item.thumbnail} alt="" />
-                <div><p>{item.title}</p><small>by {item.addedBy}</small></div>
-                {isHost ? (
-                  <div className="item-controls">
-                    <button className="btn mini" onClick={() => send({ type: 'queue:move', from: index, to: index - 1 })}>↑</button>
-                    <button className="btn mini" onClick={() => send({ type: 'queue:move', from: index, to: index + 1 })}>↓</button>
-                    <button className="btn mini" onClick={() => send({ type: 'queue:remove', id: item.id })}>✕</button>
-                  </div>
-                ) : null}
-              </article>
+                <span>{item.title}</span>
+              </button>
             ))}
           </div>
+
+          <h3>Recommendations</h3>
+          <div className="list">
+            {recommendations.map((item) => (
+              <button key={`rec-${item.videoId}`} className="list-item" onClick={() => addResolvedSong(item)}>
+                <img src={item.thumbnail} alt="" />
+                <span>{item.title}</span>
+              </button>
+            ))}
+          </div>
+        </article>
+      </section>
+
+      <section className="queue-section">
+        <div className="queue-head">
+          <h3>Up Next</h3>
+          <div className="add-inline">
+            <input value={songInput} onChange={(e) => setSongInput(e.target.value)} placeholder="Paste YouTube URL or ID" />
+            <button onClick={addByUrl}>Add</button>
+          </div>
+        </div>
+        <div className="queue-list">
+          {room.queue.length === 0 ? <p className="meta">Queue is empty</p> : null}
+          {room.queue.map((item, index) => (
+            <article key={item.id} className="queue-item">
+              <img src={item.thumbnail} alt="" />
+              <div>
+                <p>{item.title}</p>
+                <small>by {item.addedBy}</small>
+              </div>
+              {isHost ? (
+                <div className="item-controls">
+                  <button onClick={() => send({ type: 'queue:move', from: index, to: index - 1 })}>↑</button>
+                  <button onClick={() => send({ type: 'queue:move', from: index, to: index + 1 })}>↓</button>
+                  <button onClick={() => send({ type: 'queue:remove', id: item.id })}>✕</button>
+                </div>
+              ) : null}
+            </article>
+          ))}
         </div>
       </section>
-      {status ? <p className="status status-bottom">{status}</p> : null}
+
+      {status ? <p className="status">{status}</p> : null}
     </main>
   )
 }
