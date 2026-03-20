@@ -157,11 +157,34 @@ input:focus {
   overflow: hidden;
   border-radius: 18px;
   background: #0b101a;
+  display: grid;
+  align-items: center;
+  position: relative;
 }
 
 .player {
   width: 100%;
   height: 100%;
+}
+
+.cover-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: saturate(1.05) contrast(1.03);
+}
+
+.cover-art.fallback {
+  background: radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.2), transparent 60%), linear-gradient(145deg, #161d2b, #0d121d);
+}
+
+.hidden-player {
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
 }
 
 .player-meta {

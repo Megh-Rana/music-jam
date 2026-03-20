@@ -59,6 +59,44 @@ async function fetchVideoById(videoId, apiKey) {
   return { videoId, title: data.title, thumbnail: data.thumbnail_url || '' }
 }
 
+async function fetchRecommendations(videoId, apiKey) {
+  const relatedUrl = new URL('https://www.googleapis.com/youtube/v3/search')
+  relatedUrl.searchParams.set('key', apiKey)
+  relatedUrl.searchParams.set('part', 'snippet')
+  relatedUrl.searchParams.set('type', 'video')
+  relatedUrl.searchParams.set('relatedToVideoId', videoId)
+  relatedUrl.searchParams.set('maxResults', '6')
+  const relatedRes = await fetch(relatedUrl)
+  if (relatedRes.ok) {
+    const relatedData = await relatedRes.json()
+    const relatedItems = (relatedData.items || []).map((item) => ({
+      videoId: item.id.videoId,
+      title: item.snippet.title,
+      thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || '',
+    }))
+    if (relatedItems.length > 0) return relatedItems
+  }
+
+  const source = await fetchVideoById(videoId, apiKey)
+  if (!source?.title) return []
+  const queryUrl = new URL('https://www.googleapis.com/youtube/v3/search')
+  queryUrl.searchParams.set('key', apiKey)
+  queryUrl.searchParams.set('part', 'snippet')
+  queryUrl.searchParams.set('type', 'video')
+  queryUrl.searchParams.set('q', `${source.title} music`)
+  queryUrl.searchParams.set('maxResults', '6')
+  const queryRes = await fetch(queryUrl)
+  if (!queryRes.ok) return []
+  const queryData = await queryRes.json()
+  return (queryData.items || [])
+    .map((item) => ({
+      videoId: item.id.videoId,
+      title: item.snippet.title,
+      thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || '',
+    }))
+    .filter((item) => item.videoId !== videoId)
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return json({ ok: true })
@@ -131,21 +169,12 @@ export default {
       const apiKey = env.YOUTUBE_API_KEY || ''
       const videoId = parseVideoId(String(url.searchParams.get('videoId') || ''))
       if (!apiKey || !videoId) return json({ items: [] })
-      const ytUrl = new URL('https://www.googleapis.com/youtube/v3/search')
-      ytUrl.searchParams.set('key', apiKey)
-      ytUrl.searchParams.set('part', 'snippet')
-      ytUrl.searchParams.set('type', 'video')
-      ytUrl.searchParams.set('relatedToVideoId', videoId)
-      ytUrl.searchParams.set('maxResults', '6')
-      const res = await fetch(ytUrl)
-      if (!res.ok) return json({ items: [] })
-      const data = await res.json()
-      const items = (data.items || []).map((item) => ({
-        videoId: item.id.videoId,
-        title: item.snippet.title,
-        thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || '',
-      }))
-      return json({ items })
+      try {
+        const items = await fetchRecommendations(videoId, apiKey)
+        return json({ items })
+      } catch {
+        return json({ items: [] })
+      }
     }
 
     if (url.pathname === '/api/resolve' && request.method === 'POST') {
@@ -271,11 +300,11 @@ export class RoomDurableObject {
           }
         }
 
-        if (msg.type === 'queue:remove') {
+        if (msg.type === 'queue:remove' && isHost) {
           this.room.queue = this.room.queue.filter((item) => item.id !== msg.id)
         }
 
-        if (msg.type === 'queue:move') {
+        if (msg.type === 'queue:move' && isHost) {
           const from = Number(msg.from)
           const to = Number(msg.to)
           if (from >= 0 && to >= 0 && from < this.room.queue.length && to < this.room.queue.length) {
@@ -284,7 +313,7 @@ export class RoomDurableObject {
           }
         }
 
-        if (msg.type === 'queue:mix') {
+        if (msg.type === 'queue:mix' && isHost) {
           for (let i = this.room.queue.length - 1; i > 0; i -= 1) {
             const j = Math.floor(Math.random() * (i + 1))
             ;[this.room.queue[i], this.room.queue[j]] = [this.room.queue[j], this.room.queue[i]]

@@ -45,11 +45,16 @@ export default function App() {
 
   const isHost = room && clientId && room.hostId === clientId
   const membersLabel = useMemo(() => (room ? `${room.members.length} listening` : ''), [room])
+  const coverThumb = room?.current?.thumbnail || ''
 
   useEffect(() => {
     roomRef.current = room
     isHostRef.current = Boolean(isHost)
   }, [room, isHost])
+
+  const send = (payload) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(payload))
+  }
 
   const emitPlayback = (videoId, status, positionSec, force = false) => {
     if (!videoId) return
@@ -62,10 +67,6 @@ export default function App() {
     if (!force && !changedVideo && !changedStatus && !jumped && !stale) return
     send({ type: 'playback:update', playback: { videoId, status, positionSec } })
     lastPlaybackEmitRef.current = { videoId, status, positionSec, at: now }
-  }
-
-  const send = (payload) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(payload))
   }
 
   const connectWs = (roomCode, cid, displayName) => {
@@ -92,18 +93,16 @@ export default function App() {
   useEffect(() => {
     if (!room) return undefined
     let disposed = false
-
     function mountPlayer() {
       if (playerRef.current || !window.YT?.Player) return
       playerRef.current = new window.YT.Player(playerHostRef.current, {
         width: '100%',
         height: '100%',
-        playerVars: { controls: 1, rel: 0, modestbranding: 1, iv_load_policy: 3 },
+        playerVars: { controls: 0, rel: 0, modestbranding: 1, iv_load_policy: 3, disablekb: 1 },
         events: {
           onStateChange: (event) => {
             const latestRoom = roomRef.current
-            if (!latestRoom?.current) return
-            if (!isHostRef.current) return
+            if (!latestRoom?.current || !isHostRef.current) return
             const p = playerRef.current
             if (!p?.getCurrentTime) return
             const positionSec = Number(p.getCurrentTime() || 0)
@@ -148,7 +147,6 @@ export default function App() {
       else player.cueVideoById({ videoId, startSeconds: playback.positionSec || 0 })
       return
     }
-
     const now = Date.now()
     const expected = playback.status === 'playing'
       ? (playback.positionSec || 0) + (now - playback.updatedAt) / 1000
@@ -159,7 +157,7 @@ export default function App() {
       player.playVideo()
       if (!isHost && !autoplayHintRef.current) {
         autoplayHintRef.current = true
-        setStatus('If audio does not start, tap the player once to enable playback.')
+        setStatus('If audio does not start, tap anywhere once to enable playback.')
       }
     }
     if (playback.status === 'paused' && isPlayingState(state)) player.pauseVideo()
@@ -171,8 +169,8 @@ export default function App() {
     syncTimerRef.current = setInterval(() => {
       const player = playerRef.current
       if (!player?.getCurrentTime || !room.current) return
-      const status = isPlayingState(player.getPlayerState?.()) ? 'playing' : 'paused'
-      emitPlayback(room.current.videoId, status, Number(player.getCurrentTime() || 0))
+      const nextStatus = isPlayingState(player.getPlayerState?.()) ? 'playing' : 'paused'
+      emitPlayback(room.current.videoId, nextStatus, Number(player.getCurrentTime() || 0))
     }, 400)
     return () => {
       if (syncTimerRef.current) clearInterval(syncTimerRef.current)
@@ -256,6 +254,24 @@ export default function App() {
     }
   }
 
+  const hostTogglePlayback = () => {
+    if (!isHost || !room?.current) return
+    const player = playerRef.current
+    if (!player?.getPlayerState) return
+    if (isPlayingState(player.getPlayerState())) player.pauseVideo()
+    else player.playVideo()
+  }
+
+  const hostSeekBy = (deltaSec) => {
+    if (!isHost || !room?.current) return
+    const player = playerRef.current
+    if (!player?.getCurrentTime) return
+    const next = Math.max(0, Number(player.getCurrentTime() || 0) + deltaSec)
+    player.seekTo(next, true)
+    const nextStatus = isPlayingState(player.getPlayerState?.()) ? 'playing' : 'paused'
+    emitPlayback(room.current.videoId, nextStatus, next, true)
+  }
+
   if (!room) {
     return (
       <main className="page page-center">
@@ -283,11 +299,20 @@ export default function App() {
       </header>
       <section className="layout">
         <div className="panel player-panel">
-          <div className="player-shell"><div className="player" ref={playerHostRef}></div></div>
+          <div className="player-shell">
+            {coverThumb ? <img className="cover-art" src={coverThumb} alt="Current track" /> : <div className="cover-art fallback" />}
+            <div className="player hidden-player" ref={playerHostRef}></div>
+          </div>
           <div className="player-meta"><h3>{room.current?.title || 'Queue a song to start'}</h3><p>{room.current ? `Added by ${room.current.addedBy}` : 'Paste a YouTube link below'}</p></div>
           <div className="row wrap">
-            <button className="btn" onClick={() => send({ type: 'sync:request' })}>Resync</button>
-            {isHost ? <button className="btn btn-primary" onClick={() => send({ type: 'player:next' })}>Next song</button> : null}
+            {isHost ? (
+              <>
+                <button className="btn" onClick={() => hostSeekBy(-10)}>-10s</button>
+                <button className="btn" onClick={hostTogglePlayback}>{room.playback?.status === 'playing' ? 'Pause' : 'Play'}</button>
+                <button className="btn" onClick={() => hostSeekBy(10)}>+10s</button>
+                <button className="btn btn-primary" onClick={() => send({ type: 'player:next' })}>Next song</button>
+              </>
+            ) : null}
           </div>
         </div>
         <div className="panel">
@@ -307,18 +332,20 @@ export default function App() {
           <div className="result-list">{recommendations.map((item) => <button key={`rec-${item.videoId}`} className="result" onClick={() => addResolvedSong(item)}><img src={item.thumbnail} alt="" /><span>{item.title}</span></button>)}</div>
         </div>
         <div className="panel queue-panel">
-          <div className="row between"><h3>Queue</h3><button className="btn" onClick={() => send({ type: 'queue:mix' })}>Mix</button></div>
+          <div className="row between"><h3>Queue</h3>{isHost ? <button className="btn" onClick={() => send({ type: 'queue:mix' })}>Mix</button> : null}</div>
           <div className="queue-list">
             {room.queue.length === 0 ? <p className="meta">Queue is empty</p> : null}
             {room.queue.map((item, index) => (
               <article className="queue-item" key={item.id}>
                 <img src={item.thumbnail} alt="" />
                 <div><p>{item.title}</p><small>by {item.addedBy}</small></div>
-                <div className="item-controls">
-                  <button className="btn mini" onClick={() => send({ type: 'queue:move', from: index, to: index - 1 })}>↑</button>
-                  <button className="btn mini" onClick={() => send({ type: 'queue:move', from: index, to: index + 1 })}>↓</button>
-                  <button className="btn mini" onClick={() => send({ type: 'queue:remove', id: item.id })}>✕</button>
-                </div>
+                {isHost ? (
+                  <div className="item-controls">
+                    <button className="btn mini" onClick={() => send({ type: 'queue:move', from: index, to: index - 1 })}>↑</button>
+                    <button className="btn mini" onClick={() => send({ type: 'queue:move', from: index, to: index + 1 })}>↓</button>
+                    <button className="btn mini" onClick={() => send({ type: 'queue:remove', id: item.id })}>✕</button>
+                  </div>
+                ) : null}
               </article>
             ))}
           </div>
