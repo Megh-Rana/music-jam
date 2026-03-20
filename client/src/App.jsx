@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { io } from 'socket.io-client'
 import './App.css'
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:4000'
-const socket = io(SERVER_URL, { autoConnect: true })
+const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:8787'
 
 function clampName(input) {
   return (input || 'Guest').trim().slice(0, 24) || 'Guest'
@@ -13,7 +11,18 @@ function isPlayingState(state) {
   return state === 1
 }
 
+function toWsUrl(base, roomCode, clientId, name) {
+  const u = new URL(base)
+  u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
+  u.pathname = '/ws'
+  u.searchParams.set('roomCode', roomCode)
+  u.searchParams.set('clientId', clientId)
+  u.searchParams.set('name', name)
+  return u.toString()
+}
+
 export default function App() {
+  const wsRef = useRef(null)
   const iframePlayerRef = useRef(null)
   const playerHostRef = useRef(document.createElement('div'))
   const audioRef = useRef(null)
@@ -35,11 +44,24 @@ export default function App() {
 
   const isHost = room && clientId && room.hostId === clientId
   const isExtractMode = room?.mode === 'extract'
+  const membersLabel = useMemo(() => (room ? `${room.members.length} listening` : ''), [room])
 
-  const membersLabel = useMemo(() => {
-    if (!room) return ''
-    return `${room.members.length} listening`
-  }, [room])
+  const send = (payload) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(payload))
+  }
+
+  const connectWs = (roomCode, cid, displayName) => {
+    if (wsRef.current) wsRef.current.close()
+    const ws = new WebSocket(toWsUrl(SERVER_URL, roomCode, cid, displayName))
+    wsRef.current = ws
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data)
+        if (msg.type === 'room:update') setRoom(msg.room)
+      } catch {}
+    }
+    ws.onclose = () => setStatus('Disconnected. Rejoin room if needed.')
+  }
 
   useEffect(() => {
     fetch(`${SERVER_URL}/config`)
@@ -57,7 +79,6 @@ export default function App() {
   useEffect(() => {
     if (!room || isExtractMode) return undefined
     let disposed = false
-
     function mountPlayer() {
       if (iframePlayerRef.current || !window.YT?.Player) return
       iframePlayerRef.current = new window.YT.Player(playerHostRef.current, {
@@ -66,19 +87,13 @@ export default function App() {
         playerVars: { controls: 1, rel: 0, modestbranding: 1, iv_load_policy: 3 },
         events: {
           onStateChange: (event) => {
-            if (!room || !isHost) return
-            const current = room.current
-            if (!current) return
-            const player = iframePlayerRef.current
-            if (!player?.getCurrentTime) return
-            const positionSec = Number(player.getCurrentTime() || 0)
-            if (event.data === 0) return socket.emit('player:next', { roomCode: room.roomCode })
-            if (event.data === 1) {
-              socket.emit('playback:update', { roomCode: room.roomCode, playback: { videoId: current.videoId, status: 'playing', positionSec } })
-            }
-            if (event.data === 2) {
-              socket.emit('playback:update', { roomCode: room.roomCode, playback: { videoId: current.videoId, status: 'paused', positionSec } })
-            }
+            if (!room || !isHost || !room.current) return
+            const p = iframePlayerRef.current
+            if (!p?.getCurrentTime) return
+            const positionSec = Number(p.getCurrentTime() || 0)
+            if (event.data === 0) return send({ type: 'player:next' })
+            if (event.data === 1) send({ type: 'playback:update', playback: { videoId: room.current.videoId, status: 'playing', positionSec } })
+            if (event.data === 2) send({ type: 'playback:update', playback: { videoId: room.current.videoId, status: 'paused', positionSec } })
           },
         },
       })
@@ -106,20 +121,11 @@ export default function App() {
   }, [isExtractMode, isHost, room])
 
   useEffect(() => {
-    function onRoomUpdate(nextRoom) {
-      setRoom(nextRoom)
-    }
-    socket.on('room:update', onRoomUpdate)
-    return () => socket.off('room:update', onRoomUpdate)
-  }, [])
-
-  useEffect(() => {
     if (!room?.current?.videoId) return
-    const playback = room.playback
     if (isExtractMode) return
     const player = iframePlayerRef.current
     if (!player?.getPlayerState) return
-
+    const playback = room.playback
     const videoId = room.current.videoId
     const state = player.getPlayerState()
     const loadedId = player.getVideoData?.().video_id
@@ -128,7 +134,6 @@ export default function App() {
       else player.cueVideoById({ videoId, startSeconds: playback.positionSec || 0 })
       return
     }
-
     const now = Date.now()
     const expected = playback.status === 'playing'
       ? (playback.positionSec || 0) + (now - playback.updatedAt) / 1000
@@ -143,7 +148,6 @@ export default function App() {
     if (!room?.current?.videoId || !isExtractMode) return
     const audio = audioRef.current
     if (!audio) return
-
     fetch(`${SERVER_URL}/api/extract`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -153,8 +157,7 @@ export default function App() {
       .then(({ ok, data }) => {
         if (!ok) throw new Error(data.error || 'Failed to extract audio')
         audio.src = data.streamUrl
-        const playAt = Math.max(0, room.playback.positionSec || 0)
-        audio.currentTime = playAt
+        audio.currentTime = Math.max(0, room.playback.positionSec || 0)
         if (room.playback.status === 'playing') audio.play().catch(() => null)
       })
       .catch((err) => setStatus(err.message))
@@ -164,24 +167,18 @@ export default function App() {
     if (!room?.current || !isExtractMode) return
     const audio = audioRef.current
     if (!audio) return
-
     const now = Date.now()
     const expected = room.playback.status === 'playing'
       ? (room.playback.positionSec || 0) + (now - room.playback.updatedAt) / 1000
       : (room.playback.positionSec || 0)
-
-    if (Math.abs((audio.currentTime || 0) - expected) > 2.2) {
-      audio.currentTime = Math.max(0, expected)
-    }
+    if (Math.abs((audio.currentTime || 0) - expected) > 2.2) audio.currentTime = Math.max(0, expected)
     if (room.playback.status === 'playing' && audio.paused) audio.play().catch(() => null)
     if (room.playback.status === 'paused' && !audio.paused) audio.pause()
   }, [isExtractMode, room?.playback?.updatedAt])
 
   useEffect(() => {
-    if (!syncTimerRef.current) syncTimerRef.current = null
     if (syncTimerRef.current) clearInterval(syncTimerRef.current)
     if (!room || !isHost) return
-
     syncTimerRef.current = setInterval(() => {
       if (!room.current) return
       let positionSec = 0
@@ -192,18 +189,14 @@ export default function App() {
         positionSec = Number(audio.currentTime || 0)
         playing = !audio.paused
       } else {
-        const player = iframePlayerRef.current
-        if (!player?.getCurrentTime) return
-        positionSec = Number(player.getCurrentTime() || 0)
-        playing = isPlayingState(player.getPlayerState?.())
+        const p = iframePlayerRef.current
+        if (!p?.getCurrentTime) return
+        positionSec = Number(p.getCurrentTime() || 0)
+        playing = isPlayingState(p.getPlayerState?.())
       }
       if (!playing) return
-      socket.emit('playback:update', {
-        roomCode: room.roomCode,
-        playback: { videoId: room.current.videoId, status: 'playing', positionSec },
-      })
+      send({ type: 'playback:update', playback: { videoId: room.current.videoId, status: 'playing', positionSec } })
     }, 2000)
-
     return () => {
       if (syncTimerRef.current) clearInterval(syncTimerRef.current)
     }
@@ -213,10 +206,9 @@ export default function App() {
     if (!isHost || !isExtractMode || !room) return
     const audio = audioRef.current
     if (!audio) return
-
-    const onPlay = () => socket.emit('playback:update', { roomCode: room.roomCode, playback: { videoId: room.current?.videoId, status: 'playing', positionSec: Number(audio.currentTime || 0) } })
-    const onPause = () => socket.emit('playback:update', { roomCode: room.roomCode, playback: { videoId: room.current?.videoId, status: 'paused', positionSec: Number(audio.currentTime || 0) } })
-    const onEnded = () => socket.emit('player:next', { roomCode: room.roomCode })
+    const onPlay = () => send({ type: 'playback:update', playback: { videoId: room.current?.videoId, status: 'playing', positionSec: Number(audio.currentTime || 0) } })
+    const onPause = () => send({ type: 'playback:update', playback: { videoId: room.current?.videoId, status: 'paused', positionSec: Number(audio.currentTime || 0) } })
+    const onEnded = () => send({ type: 'player:next' })
     audio.addEventListener('play', onPlay)
     audio.addEventListener('pause', onPause)
     audio.addEventListener('ended', onEnded)
@@ -238,28 +230,37 @@ export default function App() {
       .catch(() => setRecommendations([]))
   }, [room?.current?.videoId, searchEnabled])
 
-  const createRoom = () => {
-    socket.emit('room:create', { name: clampName(name), mode: roomMode }, (result) => {
-      if (!result?.ok) return setStatus(result?.error || 'Failed to create room')
-      setClientId(result.clientId)
-      setRoom(result.room)
-      setStatus('Room created')
+  const createRoom = async () => {
+    const displayName = clampName(name)
+    const res = await fetch(`${SERVER_URL}/api/room/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: displayName, mode: roomMode }),
     })
+    const data = await res.json()
+    if (!res.ok || !data.ok) return setStatus(data.error || 'Failed to create room')
+    setClientId(data.clientId)
+    setRoom(data.room)
+    connectWs(data.roomCode, data.clientId, displayName)
+    setStatus('Room created')
   }
 
-  const joinRoom = () => {
-    socket.emit('room:join', { roomCode: joinCode.trim().toUpperCase(), name: clampName(name) }, (result) => {
-      if (!result?.ok) return setStatus(result?.error || 'Failed to join room')
-      setClientId(result.clientId)
-      setRoom(result.room)
-      setStatus('Joined room')
+  const joinRoom = async () => {
+    const displayName = clampName(name)
+    const res = await fetch(`${SERVER_URL}/api/room/join`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ roomCode: joinCode.trim().toUpperCase() }),
     })
+    const data = await res.json()
+    if (!res.ok || !data.ok) return setStatus(data.error || 'Failed to join room')
+    setClientId(data.clientId)
+    connectWs(data.roomCode, data.clientId, displayName)
+    setStatus('Joined room')
   }
 
-  const addResolvedSong = (song) => room && song?.videoId && socket.emit('queue:add', { roomCode: room.roomCode, song })
+  const addResolvedSong = (song) => song?.videoId && send({ type: 'queue:add', song })
 
   const addByUrl = async () => {
-    if (!songInput.trim() || !room) return
+    if (!songInput.trim()) return
     const res = await fetch(`${SERVER_URL}/api/resolve`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ input: songInput.trim() }),
     })
@@ -271,7 +272,7 @@ export default function App() {
   }
 
   const searchSongs = async () => {
-    if (!searchEnabled) return setStatus('Search disabled: add YOUTUBE_API_KEY on server')
+    if (!searchEnabled) return setStatus('Search disabled: add YOUTUBE_API_KEY on backend')
     const q = searchQuery.trim()
     if (!q) return
     setLoadingSearch(true)
@@ -323,13 +324,11 @@ export default function App() {
       </header>
       <section className="layout">
         <div className="panel player-panel">
-          <div className="player-shell">
-            {isExtractMode ? <audio className="audio-player" ref={audioRef} controls /> : <div className="player" ref={playerHostRef}></div>}
-          </div>
+          <div className="player-shell">{isExtractMode ? <audio className="audio-player" ref={audioRef} controls /> : <div className="player" ref={playerHostRef}></div>}</div>
           <div className="player-meta"><h3>{room.current?.title || 'Queue a song to start'}</h3><p>{room.current ? `Added by ${room.current.addedBy}` : 'Paste a YouTube link below'}</p></div>
           <div className="row wrap">
-            <button className="btn" onClick={() => socket.emit('sync:request', { roomCode: room.roomCode })}>Resync</button>
-            {isHost ? <button className="btn btn-primary" onClick={() => socket.emit('player:next', { roomCode: room.roomCode })}>Next song</button> : null}
+            <button className="btn" onClick={() => send({ type: 'sync:request' })}>Resync</button>
+            {isHost ? <button className="btn btn-primary" onClick={() => send({ type: 'player:next' })}>Next song</button> : null}
           </div>
         </div>
         <div className="panel">
@@ -349,7 +348,7 @@ export default function App() {
           <div className="result-list">{recommendations.map((item) => <button key={`rec-${item.videoId}`} className="result" onClick={() => addResolvedSong(item)}><img src={item.thumbnail} alt="" /><span>{item.title}</span></button>)}</div>
         </div>
         <div className="panel queue-panel">
-          <div className="row between"><h3>Queue</h3><button className="btn" onClick={() => socket.emit('queue:mix', { roomCode: room.roomCode })}>Mix</button></div>
+          <div className="row between"><h3>Queue</h3><button className="btn" onClick={() => send({ type: 'queue:mix' })}>Mix</button></div>
           <div className="queue-list">
             {room.queue.length === 0 ? <p className="meta">Queue is empty</p> : null}
             {room.queue.map((item, index) => (
@@ -357,9 +356,9 @@ export default function App() {
                 <img src={item.thumbnail} alt="" />
                 <div><p>{item.title}</p><small>by {item.addedBy}</small></div>
                 <div className="item-controls">
-                  <button className="btn mini" onClick={() => socket.emit('queue:move', { roomCode: room.roomCode, from: index, to: index - 1 })}>↑</button>
-                  <button className="btn mini" onClick={() => socket.emit('queue:move', { roomCode: room.roomCode, from: index, to: index + 1 })}>↓</button>
-                  <button className="btn mini" onClick={() => socket.emit('queue:remove', { roomCode: room.roomCode, id: item.id })}>✕</button>
+                  <button className="btn mini" onClick={() => send({ type: 'queue:move', from: index, to: index - 1 })}>↑</button>
+                  <button className="btn mini" onClick={() => send({ type: 'queue:move', from: index, to: index + 1 })}>↓</button>
+                  <button className="btn mini" onClick={() => send({ type: 'queue:remove', id: item.id })}>✕</button>
                 </div>
               </article>
             ))}

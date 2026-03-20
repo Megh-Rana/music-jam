@@ -5,3 +5,5 @@ client/dist/
 *.log
 .DS_Store
 server/.env
+server/.dev.vars
+server/.wrangler/
