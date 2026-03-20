@@ -133,7 +133,9 @@ export default function App() {
     const prevReady = window.onYouTubeIframeAPIReady
     window.onYouTubeIframeAPIReady = () => {
       if (typeof prevReady === 'function') prevReady()
-      if (!disposed) mountPlayer()
+      setTimeout(() => {
+        if (!disposed) mountPlayer()
+      }, 0)
     }
     return () => {
       disposed = true
