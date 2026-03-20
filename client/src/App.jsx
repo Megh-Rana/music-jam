@@ -27,6 +27,10 @@ export default function App() {
   const playerHostRef = useRef(document.createElement('div'))
   const audioRef = useRef(null)
   const syncTimerRef = useRef(null)
+  const roomRef = useRef(null)
+  const isHostRef = useRef(false)
+  const lastPlaybackEmitRef = useRef({ videoId: null, status: null, positionSec: 0, at: 0 })
+  const autoplayHintRef = useRef(false)
 
   const [name, setName] = useState('')
   const [joinCode, setJoinCode] = useState('')
@@ -46,6 +50,24 @@ export default function App() {
   const isExtractMode = room?.mode === 'extract'
   const membersLabel = useMemo(() => (room ? `${room.members.length} listening` : ''), [room])
 
+  useEffect(() => {
+    roomRef.current = room
+    isHostRef.current = Boolean(isHost)
+  }, [room, isHost])
+
+  const emitPlayback = (videoId, status, positionSec, force = false) => {
+    if (!videoId) return
+    const now = Date.now()
+    const last = lastPlaybackEmitRef.current
+    const changedVideo = last.videoId !== videoId
+    const changedStatus = last.status !== status
+    const jumped = Math.abs((last.positionSec || 0) - (positionSec || 0)) > 1.1
+    const stale = now - (last.at || 0) > 1800
+    if (!force && !changedVideo && !changedStatus && !jumped && !stale) return
+    send({ type: 'playback:update', playback: { videoId, status, positionSec } })
+    lastPlaybackEmitRef.current = { videoId, status, positionSec, at: now }
+  }
+
   const send = (payload) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(payload))
   }
@@ -54,6 +76,7 @@ export default function App() {
     if (wsRef.current) wsRef.current.close()
     const ws = new WebSocket(toWsUrl(SERVER_URL, roomCode, cid, displayName))
     wsRef.current = ws
+    ws.onopen = () => send({ type: 'sync:request' })
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data)
@@ -87,13 +110,15 @@ export default function App() {
         playerVars: { controls: 1, rel: 0, modestbranding: 1, iv_load_policy: 3 },
         events: {
           onStateChange: (event) => {
-            if (!room || !isHost || !room.current) return
+            const latestRoom = roomRef.current
+            if (!latestRoom?.current) return
+            if (!isHostRef.current) return
             const p = iframePlayerRef.current
             if (!p?.getCurrentTime) return
             const positionSec = Number(p.getCurrentTime() || 0)
             if (event.data === 0) return send({ type: 'player:next' })
-            if (event.data === 1) send({ type: 'playback:update', playback: { videoId: room.current.videoId, status: 'playing', positionSec } })
-            if (event.data === 2) send({ type: 'playback:update', playback: { videoId: room.current.videoId, status: 'paused', positionSec } })
+            if (event.data === 1) emitPlayback(latestRoom.current.videoId, 'playing', positionSec, true)
+            if (event.data === 2) emitPlayback(latestRoom.current.videoId, 'paused', positionSec, true)
           },
         },
       })
@@ -140,7 +165,13 @@ export default function App() {
       : (playback.positionSec || 0)
     const current = Number(player.getCurrentTime?.() || 0)
     if (Math.abs(current - expected) > 2.2) player.seekTo(expected, true)
-    if (playback.status === 'playing' && !isPlayingState(state)) player.playVideo()
+    if (playback.status === 'playing' && !isPlayingState(state)) {
+      player.playVideo()
+      if (!isHost && !autoplayHintRef.current) {
+        autoplayHintRef.current = true
+        setStatus('If audio does not start, tap the player once to enable playback.')
+      }
+    }
     if (playback.status === 'paused' && isPlayingState(state)) player.pauseVideo()
   }, [isExtractMode, room])
 
@@ -182,21 +213,20 @@ export default function App() {
     syncTimerRef.current = setInterval(() => {
       if (!room.current) return
       let positionSec = 0
-      let playing = false
+      let status = 'paused'
       if (isExtractMode) {
         const audio = audioRef.current
         if (!audio) return
         positionSec = Number(audio.currentTime || 0)
-        playing = !audio.paused
+        status = audio.paused ? 'paused' : 'playing'
       } else {
         const p = iframePlayerRef.current
         if (!p?.getCurrentTime) return
         positionSec = Number(p.getCurrentTime() || 0)
-        playing = isPlayingState(p.getPlayerState?.())
+        status = isPlayingState(p.getPlayerState?.()) ? 'playing' : 'paused'
       }
-      if (!playing) return
-      send({ type: 'playback:update', playback: { videoId: room.current.videoId, status: 'playing', positionSec } })
-    }, 2000)
+      emitPlayback(room.current.videoId, status, positionSec)
+    }, 400)
     return () => {
       if (syncTimerRef.current) clearInterval(syncTimerRef.current)
     }
@@ -206,18 +236,29 @@ export default function App() {
     if (!isHost || !isExtractMode || !room) return
     const audio = audioRef.current
     if (!audio) return
-    const onPlay = () => send({ type: 'playback:update', playback: { videoId: room.current?.videoId, status: 'playing', positionSec: Number(audio.currentTime || 0) } })
-    const onPause = () => send({ type: 'playback:update', playback: { videoId: room.current?.videoId, status: 'paused', positionSec: Number(audio.currentTime || 0) } })
+    const onPlay = () => emitPlayback(room.current?.videoId, 'playing', Number(audio.currentTime || 0), true)
+    const onPause = () => emitPlayback(room.current?.videoId, 'paused', Number(audio.currentTime || 0), true)
+    const onSeeked = () => emitPlayback(room.current?.videoId, audio.paused ? 'paused' : 'playing', Number(audio.currentTime || 0), true)
     const onEnded = () => send({ type: 'player:next' })
     audio.addEventListener('play', onPlay)
     audio.addEventListener('pause', onPause)
+    audio.addEventListener('seeked', onSeeked)
     audio.addEventListener('ended', onEnded)
     return () => {
       audio.removeEventListener('play', onPlay)
       audio.removeEventListener('pause', onPause)
+      audio.removeEventListener('seeked', onSeeked)
       audio.removeEventListener('ended', onEnded)
     }
   }, [isExtractMode, isHost, room])
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') send({ type: 'sync:request' })
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [])
 
   useEffect(() => {
     if (!room?.current?.videoId || !searchEnabled) {
@@ -324,7 +365,7 @@ export default function App() {
       </header>
       <section className="layout">
         <div className="panel player-panel">
-          <div className="player-shell">{isExtractMode ? <audio className="audio-player" ref={audioRef} controls /> : <div className="player" ref={playerHostRef}></div>}</div>
+          <div className="player-shell">{isExtractMode ? <audio className="audio-player" ref={audioRef} controls={isHost} /> : <div className="player" ref={playerHostRef}></div>}</div>
           <div className="player-meta"><h3>{room.current?.title || 'Queue a song to start'}</h3><p>{room.current ? `Added by ${room.current.addedBy}` : 'Paste a YouTube link below'}</p></div>
           <div className="row wrap">
             <button className="btn" onClick={() => send({ type: 'sync:request' })}>Resync</button>
