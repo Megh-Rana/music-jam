@@ -34,8 +34,7 @@ export default function App() {
   const [joinCode, setJoinCode] = useState('')
   const [clientId, setClientId] = useState('')
   const [room, setRoom] = useState(null)
-  const [songInput, setSongInput] = useState('')
-  const [searchQuery, setSearchQuery] = useState('')
+  const [searchInput, setSearchInput] = useState('')
   const [searchItems, setSearchItems] = useState([])
   const [recommendations, setRecommendations] = useState([])
   const [searchEnabled, setSearchEnabled] = useState(false)
@@ -47,6 +46,7 @@ export default function App() {
   const membersLabel = useMemo(() => (room ? `${room.members.length} live` : ''), [room])
   const coverThumb = room?.current?.thumbnail || ''
   const hasCover = Boolean(coverThumb && !coverBroken)
+  const playbackStatus = room?.playback?.status || 'paused'
 
   useEffect(() => {
     setCoverBroken(false)
@@ -222,28 +222,57 @@ export default function App() {
 
   const addResolvedSong = (song) => song?.videoId && send({ type: 'queue:add', song })
 
-  const addByUrl = async () => {
-    if (!songInput.trim()) return
-    const res = await fetch(`${SERVER_URL}/api/resolve`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ input: songInput.trim() }),
-    })
-    const data = await res.json()
-    if (!res.ok) return setStatus(data.error || 'Could not add song')
-    addResolvedSong(data)
-    setSongInput('')
-    setStatus('Added to queue')
+  const parseVideoId = (input) => {
+    if (!input) return null
+    const trimmed = input.trim()
+    if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return trimmed
+    try {
+      const url = new URL(trimmed)
+      if (url.hostname.includes('youtu.be')) {
+        const id = url.pathname.slice(1)
+        return /^[a-zA-Z0-9_-]{11}$/.test(id) ? id : null
+      }
+      const v = url.searchParams.get('v')
+      if (v && /^[a-zA-Z0-9_-]{11}$/.test(v)) return v
+      const parts = url.pathname.split('/').filter(Boolean)
+      if (parts[0] === 'shorts' && parts[1] && /^[a-zA-Z0-9_-]{11}$/.test(parts[1])) return parts[1]
+    } catch {
+      return null
+    }
+    return null
   }
 
-  const searchSongs = async () => {
-    if (!searchEnabled) return setStatus('Search disabled: add YOUTUBE_API_KEY on backend')
-    const q = searchQuery.trim()
+  const handleSearchOrAdd = async () => {
+    const q = searchInput.trim()
     if (!q) return
+    const id = parseVideoId(q)
+    if (id) {
+      try {
+        const res = await fetch(`${SERVER_URL}/api/resolve`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ input: q }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Could not add song')
+        addResolvedSong(data)
+        setStatus('Added to queue')
+        setSearchInput('')
+      } catch (error) {
+        setStatus(error.message)
+      }
+      return
+    }
+
+    if (!searchEnabled) {
+      setStatus('Search disabled: add YOUTUBE_API_KEY on backend')
+      return
+    }
     setLoadingSearch(true)
     try {
       const res = await fetch(`${SERVER_URL}/api/search?q=${encodeURIComponent(q)}`)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Search failed')
       setSearchItems(data.items || [])
+      setStatus('')
     } catch (error) {
       setStatus(error.message)
       setSearchItems([])
@@ -328,7 +357,7 @@ export default function App() {
             {isHost ? (
               <div className="host-controls">
                 <button onClick={() => hostSeekBy(-10)}>-10s</button>
-                <button onClick={hostTogglePlayback}>{room.playback?.status === 'playing' ? 'Pause' : 'Play'}</button>
+                <button onClick={hostTogglePlayback}>{playbackStatus === 'playing' ? 'Pause' : 'Play'}</button>
                 <button onClick={() => hostSeekBy(10)}>+10s</button>
                 <button className="primary" onClick={() => send({ type: 'player:next' })}>Next</button>
               </div>
@@ -339,12 +368,15 @@ export default function App() {
         <article className="search-card card">
           <h3>Search or Paste</h3>
           <div className="search-row">
-            <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Track, artist, or genre" />
-            <button onClick={searchSongs} disabled={loadingSearch || !searchEnabled}>{loadingSearch ? '...' : 'Search'}</button>
-          </div>
-          <div className="add-inline">
-            <input value={songInput} onChange={(e) => setSongInput(e.target.value)} placeholder="Paste YouTube URL or ID" />
-            <button onClick={addByUrl}>Add</button>
+            <input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Track, artist, genre, or YouTube URL/ID"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSearchOrAdd()
+              }}
+            />
+            <button onClick={handleSearchOrAdd} disabled={loadingSearch}>{loadingSearch ? '...' : 'Go'}</button>
           </div>
           <div className="list">
             {searchItems.map((item) => (
