@@ -88,9 +88,12 @@ button {
   grid-template-columns: 1.1fr 1fr;
 }
 
-.now-playing,
-.search-panel,
-.queue-section {
+.layout-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.card {
   background: #19191e;
   padding: 16px;
 }
@@ -100,6 +103,12 @@ button {
   background: #25252b;
   position: relative;
   overflow: hidden;
+}
+
+.cover-fallback {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, #ff9068 0%, #251726 45%, #0e0e12 100%);
 }
 
 .cover-art {
@@ -190,6 +199,15 @@ button {
   margin-top: 0;
 }
 
+.search-card .list {
+  max-height: 200px;
+}
+
+.queue-count {
+  color: #acaab0;
+  font-size: 0.9rem;
+}
+
 .queue-head {
   display: flex;
   justify-content: space-between;
@@ -240,7 +258,8 @@ button {
 }
 
 @media (max-width: 980px) {
-  .player-grid {
+  .player-grid,
+  .layout-stack {
     grid-template-columns: 1fr;
   }
 

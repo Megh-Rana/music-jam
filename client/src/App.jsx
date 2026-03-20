@@ -46,6 +46,7 @@ export default function App() {
   const isHost = room && clientId && room.hostId === clientId
   const membersLabel = useMemo(() => (room ? `${room.members.length} live` : ''), [room])
   const coverThumb = room?.current?.thumbnail || ''
+  const hasCover = Boolean(coverThumb && !coverBroken)
 
   useEffect(() => {
     setCoverBroken(false)
@@ -312,33 +313,53 @@ export default function App() {
         <p>#{room.roomCode} · {membersLabel}</p>
       </header>
 
-      <section className="player-grid">
-        <article className="now-playing">
+      <section className="layout-stack">
+        <article className="now-playing card">
           <div className="cover-wrap">
-            {coverThumb && !coverBroken
-              ? <img className="cover-art" src={coverThumb} alt="Current track" onError={() => setCoverBroken(true)} />
-              : <div className="cover-art fallback" />}
+            <div className="cover-fallback" />
+            {hasCover ? (
+              <img className="cover-art" src={coverThumb} alt="Current track" onError={() => setCoverBroken(true)} />
+            ) : null}
             <div className="player hidden-player" ref={playerHostRef}></div>
           </div>
-          <h2>{room.current?.title || 'Queue a song to start'}</h2>
-          <p>{room.current ? `Added by ${room.current.addedBy}` : 'Paste a YouTube URL below'}</p>
-          {isHost ? (
-            <div className="host-controls">
-              <button onClick={() => hostSeekBy(-10)}>-10s</button>
-              <button onClick={hostTogglePlayback}>{room.playback?.status === 'playing' ? 'Pause' : 'Play'}</button>
-              <button onClick={() => hostSeekBy(10)}>+10s</button>
-              <button className="primary" onClick={() => send({ type: 'player:next' })}>Next</button>
-            </div>
-          ) : null}
+          <div className="now-meta">
+            <h2>{room.current?.title || 'Queue a song to start'}</h2>
+            <p>{room.current ? `Added by ${room.current.addedBy}` : 'Paste a YouTube URL or search below'}</p>
+            {isHost ? (
+              <div className="host-controls">
+                <button onClick={() => hostSeekBy(-10)}>-10s</button>
+                <button onClick={hostTogglePlayback}>{room.playback?.status === 'playing' ? 'Pause' : 'Play'}</button>
+                <button onClick={() => hostSeekBy(10)}>+10s</button>
+                <button className="primary" onClick={() => send({ type: 'player:next' })}>Next</button>
+              </div>
+            ) : null}
+          </div>
         </article>
 
-        <section className="queue-section">
+        <article className="search-card card">
+          <h3>Search or Paste</h3>
+          <div className="search-row">
+            <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Track, artist, or genre" />
+            <button onClick={searchSongs} disabled={loadingSearch || !searchEnabled}>{loadingSearch ? '...' : 'Search'}</button>
+          </div>
+          <div className="add-inline">
+            <input value={songInput} onChange={(e) => setSongInput(e.target.value)} placeholder="Paste YouTube URL or ID" />
+            <button onClick={addByUrl}>Add</button>
+          </div>
+          <div className="list">
+            {searchItems.map((item) => (
+              <button key={item.videoId} className="list-item" onClick={() => addResolvedSong(item)}>
+                <img src={item.thumbnail} alt="" />
+                <span>{item.title}</span>
+              </button>
+            ))}
+          </div>
+        </article>
+
+        <section className="queue-section card">
           <div className="queue-head">
             <h3>Up Next</h3>
-            <div className="add-inline">
-              <input value={songInput} onChange={(e) => setSongInput(e.target.value)} placeholder="Paste YouTube URL or ID" />
-              <button onClick={addByUrl}>Add</button>
-            </div>
+            <span className="queue-count">{room.queue.length} queued</span>
           </div>
           <div className="queue-list">
             {room.queue.length === 0 ? <p className="meta">Queue is empty</p> : null}
@@ -358,28 +379,12 @@ export default function App() {
             ))}
           </div>
         </section>
-      </section>
 
-      <article className="search-panel">
-        <h3>Find Your Sound</h3>
-        <div className="search-row">
-          <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Track, artist, or genre" />
-          <button onClick={searchSongs} disabled={loadingSearch || !searchEnabled}>{loadingSearch ? '...' : 'Search'}</button>
-        </div>
-        <div className="list">
-          {searchItems.map((item) => (
-            <button key={item.videoId} className="list-item" onClick={() => addResolvedSong(item)}>
-              <img src={item.thumbnail} alt="" />
-              <span>{item.title}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="recommend-strip">
+        <div className="recommend-strip card">
           <p>Recommendations ready: {recommendations.length}</p>
           <button onClick={addRecommendedBatch}>Add Recommended Mix</button>
         </div>
-      </article>
+      </section>
 
       {status ? <p className="status">{status}</p> : null}
     </main>

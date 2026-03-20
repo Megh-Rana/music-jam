@@ -38,8 +38,14 @@ Set `VITE_SERVER_URL` in frontend env to Worker URL if needed.
 
 ## Deploy
 
-- Backend: `cd server && npm run deploy`
-- Frontend: deploy `client` on Vercel and set `VITE_SERVER_URL` to backend Worker URL
+- Backend (Cloudflare Workers): `cd server && npm run deploy`
+  - Set secrets/vars in Cloudflare dashboard for each environment:
+    - `YOUTUBE_API_KEY` (required for search/recommendations)
+    - `ENABLE_YTDLP=false` on main
+  - Project root for Git deploy: `server`
+- Frontend (Vercel): deploy `client`
+  - Set env `VITE_SERVER_URL` to the Worker URL (e.g. `https://music-jam-backend.<your>.workers.dev`)
+  - Production/preview envs must each have the variable set
 
 ## Backend Vars
 

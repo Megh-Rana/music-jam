@@ -296,7 +296,7 @@ export class RoomDurableObject {
             this.room.current = item
             this.room.playback = { videoId: item.videoId, status: 'paused', positionSec: 0, updatedAt: Date.now() }
           } else {
-            this.room.queue.push(item)
+            this.room.queue.unshift(item)
           }
         }
 
