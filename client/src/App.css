@@ -195,7 +195,7 @@ button {
 }
 
 .queue-section {
-  margin-top: 14px;
+  margin-top: 0;
 }
 
 .queue-head {
@@ -226,6 +226,25 @@ button {
 
 .status {
   color: #ff716c;
+}
+
+.recommend-strip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  background: #25252b;
+  padding: 10px;
+}
+
+.recommend-strip p {
+  margin: 0;
+  color: #acaab0;
+  font-size: 0.85rem;
+}
+
+.recommend-strip button {
+  padding: 8px 12px;
 }
 
 @media (max-width: 980px) {

@@ -324,11 +324,11 @@ export class RoomDurableObject {
           }
         }
 
-        if (msg.type === 'queue:remove' && isHost) {
+        if (msg.type === 'queue:remove') {
           this.room.queue = this.room.queue.filter((item) => item.id !== msg.id)
         }
 
-        if (msg.type === 'queue:move' && isHost) {
+        if (msg.type === 'queue:move') {
           const from = Number(msg.from)
           const to = Number(msg.to)
           if (from >= 0 && to >= 0 && from < this.room.queue.length && to < this.room.queue.length) {
@@ -337,7 +337,7 @@ export class RoomDurableObject {
           }
         }
 
-        if (msg.type === 'queue:mix' && isHost) {
+        if (msg.type === 'queue:mix') {
           for (let i = this.room.queue.length - 1; i > 0; i -= 1) {
             const j = Math.floor(Math.random() * (i + 1))
             ;[this.room.queue[i], this.room.queue[j]] = [this.room.queue[j], this.room.queue[i]]
