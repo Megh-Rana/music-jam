@@ -24,7 +24,7 @@ function toWsUrl(base, roomCode, clientId, name) {
 export default function App() {
   const wsRef = useRef(null)
   const playerRef = useRef(null)
-  const playerHostRef = useRef(document.createElement('div'))
+  const playerHostRef = useRef(null)
   const syncTimerRef = useRef(null)
   const roomRef = useRef(null)
   const isHostRef = useRef(false)
@@ -99,7 +99,7 @@ export default function App() {
     if (!room) return undefined
     let disposed = false
     function mountPlayer() {
-      if (playerRef.current || !window.YT?.Player) return
+      if (playerRef.current || !window.YT?.Player || !playerHostRef.current) return
       playerRef.current = new window.YT.Player(playerHostRef.current, {
         width: '100%',
         height: '100%',
