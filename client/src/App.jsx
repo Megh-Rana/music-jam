@@ -99,7 +99,7 @@ export default function App() {
     if (!room) return undefined
     let disposed = false
     function mountPlayer() {
-      if (playerRef.current || !window.YT?.Player || !playerHostRef.current) return
+      if (playerRef.current || !window.YT?.Player || !playerHostRef.current || !playerHostRef.current.isConnected) return
       playerRef.current = new window.YT.Player(playerHostRef.current, {
         width: '100%',
         height: '100%',
@@ -137,15 +137,21 @@ export default function App() {
     }
     return () => {
       disposed = true
+      if (playerRef.current?.destroy) {
+        try {
+          playerRef.current.destroy()
+        } catch {}
+      }
+      playerRef.current = null
     }
   }, [isHost, room])
 
   useEffect(() => {
-    if (!room?.current?.videoId || !playerRef.current?.getPlayerState) return
+    if (!room?.current?.videoId || !playerRef.current?.getPlayerState || !playerHostRef.current?.isConnected) return
     const player = playerRef.current
     const playback = room.playback
     const videoId = room.current.videoId
-    const loadedId = player.getVideoData?.().video_id
+      const loadedId = player.getVideoData?.().video_id
     if (loadedId !== videoId) {
       if (playback.status === 'playing') player.loadVideoById({ videoId, startSeconds: playback.positionSec || 0 })
       else player.cueVideoById({ videoId, startSeconds: playback.positionSec || 0 })
