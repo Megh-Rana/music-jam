@@ -355,8 +355,7 @@ function App() {
           <h2>JAM TOGETHER</h2>
           <p>Real-time collaborative queue for shared listening sessions.</p>
           <label>
-            Display name
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="NeonTiger" />
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Display Name" />
           </label>
           <div className="entry-actions">
             <button className="cta" onClick={createRoom}>Create a Jam Room</button>
