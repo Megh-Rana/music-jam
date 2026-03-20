@@ -1,28 +1,19 @@
 {
-  "name": "server",
+  "name": "music-jam-worker",
   "version": "1.0.0",
-  "description": "SyncJam realtime server",
-  "main": "index.js",
+  "description": "Cloudflare Worker backend for Music Jam",
+  "main": "src/worker.js",
   "scripts": {
-    "dev": "nodemon index.js",
-    "start": "node index.js"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
-  "keywords": [
-    "music",
-    "socketio",
-    "youtube"
-  ],
+  "keywords": ["music", "cloudflare", "durable-objects"],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "axios": "^1.13.6",
-    "cors": "^2.8.6",
-    "dotenv": "^17.3.1",
-    "express": "^5.2.1",
-    "nanoid": "^5.1.7",
-    "socket.io": "^4.8.3"
+    "nanoid": "^5.1.7"
   },
   "devDependencies": {
-    "nodemon": "^3.1.11"
+    "wrangler": "^4.42.0"
   }
 }

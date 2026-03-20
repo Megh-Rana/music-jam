@@ -1,28 +1,32 @@
 # Music Jam
 
-Realtime group music queue with room codes, shared playback sync, and YouTube embed player.
-
-## Features
-
-- Anonymous room create/join with 6-char code
-- Shared queue: add, remove, reorder, mix
-- Host-authoritative playback sync for all listeners
-- URL/ID song add via YouTube resolve
-- Search + recommendations when `YOUTUBE_API_KEY` is configured
+Realtime group music queue with room codes, host-sync playback, and YouTube embed player.
 
 ## Stack
 
-- Client: React + Vite + socket.io-client
-- Server: Node.js + Express + Socket.io
+- Client: React + Vite
+- Backend: Cloudflare Workers + Durable Objects
 
-## Run locally
+## Features
+
+- Anonymous room create/join with short room code
+- Shared queue: add/remove/reorder/mix
+- Server-authoritative sync (host controls playback)
+- URL/ID song add
+- YouTube search + recommendations when `YOUTUBE_API_KEY` is set
+
+## Local Dev
+
+Backend:
 
 ```bash
 cd server
 npm install
-cp .env.example .env
+cp .dev.vars.example .dev.vars
 npm run dev
 ```
+
+Frontend:
 
 ```bash
 cd client
@@ -30,13 +34,14 @@ npm install
 npm run dev
 ```
 
-Client defaults to `http://localhost:4000`.
+Set `VITE_SERVER_URL` in frontend env to Worker URL if needed.
 
-To use a deployed backend, set `VITE_SERVER_URL` in client env.
+## Deploy
 
-## Env
+- Backend: `cd server && npm run deploy`
+- Frontend: deploy `client` on Vercel and set `VITE_SERVER_URL` to backend Worker URL
 
-Server (`server/.env`):
+## Backend Vars
 
-- `PORT=4000`
-- `YOUTUBE_API_KEY=...` (optional but needed for search/recommendations)
+- `YOUTUBE_API_KEY` (optional but needed for search/recommendations)
+- `ENABLE_YTDLP=false` on public/main branch
