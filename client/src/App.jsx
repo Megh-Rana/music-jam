@@ -1,5 +1,30 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Component, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false }
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <main className="entry-screen">
+          <header className="entry-topbar"><h1>MUSIC JAM</h1></header>
+          <section className="entry-hero">
+            <h2>Something went wrong</h2>
+            <p>Please refresh the page to reconnect.</p>
+            <button className="cta" onClick={() => window.location.reload()}>Refresh</button>
+          </section>
+        </main>
+      )
+    }
+    return this.props.children
+  }
+}
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:8787'
 
@@ -21,10 +46,9 @@ function toWsUrl(base, roomCode, clientId, name) {
   return u.toString()
 }
 
-export default function App() {
+function App() {
   const wsRef = useRef(null)
   const playerRef = useRef(null)
-  const playerHostRef = useRef(null)
   const syncTimerRef = useRef(null)
   const roomRef = useRef(null)
   const isHostRef = useRef(false)
@@ -34,6 +58,7 @@ export default function App() {
   const [joinCode, setJoinCode] = useState('')
   const [clientId, setClientId] = useState('')
   const [room, setRoom] = useState(null)
+  const hasRoom = Boolean(room)
   const [searchInput, setSearchInput] = useState('')
   const [searchItems, setSearchItems] = useState([])
   const [recommendations, setRecommendations] = useState([])
@@ -96,11 +121,13 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!room) return undefined
+    if (!hasRoom) return undefined
     let disposed = false
     function mountPlayer() {
-      if (playerRef.current || !window.YT?.Player || !playerHostRef.current || !playerHostRef.current.isConnected) return
-      playerRef.current = new window.YT.Player(playerHostRef.current, {
+      if (playerRef.current || !window.YT?.Player) return
+      const hostEl = document.getElementById('yt-player-host')
+      if (!hostEl) return
+      playerRef.current = new window.YT.Player('yt-player-host', {
         width: '100%',
         height: '100%',
         playerVars: { controls: 0, rel: 0, modestbranding: 1, iv_load_policy: 3, disablekb: 1 },
@@ -146,14 +173,14 @@ export default function App() {
       }
       playerRef.current = null
     }
-  }, [isHost, room])
+  }, [hasRoom])
 
   useEffect(() => {
-    if (!room?.current?.videoId || !playerRef.current?.getPlayerState || !playerHostRef.current?.isConnected) return
+    if (!room?.current?.videoId || !playerRef.current?.getPlayerState) return
     const player = playerRef.current
     const playback = room.playback
     const videoId = room.current.videoId
-      const loadedId = player.getVideoData?.().video_id
+      const loadedId = player.getVideoData?.()?.video_id
     if (loadedId !== videoId) {
       if (playback.status === 'playing') player.loadVideoById({ videoId, startSeconds: playback.positionSec || 0 })
       else player.cueVideoById({ videoId, startSeconds: playback.positionSec || 0 })
@@ -172,17 +199,18 @@ export default function App() {
 
   useEffect(() => {
     if (syncTimerRef.current) clearInterval(syncTimerRef.current)
-    if (!room || !isHost) return
+    if (!hasRoom || !isHost) return
     syncTimerRef.current = setInterval(() => {
       const player = playerRef.current
-      if (!player?.getCurrentTime || !room.current) return
+      const latestRoom = roomRef.current
+      if (!player?.getCurrentTime || !latestRoom?.current) return
       const nextStatus = isPlayingState(player.getPlayerState?.()) ? 'playing' : 'paused'
-      emitPlayback(room.current.videoId, nextStatus, Number(player.getCurrentTime() || 0))
+      emitPlayback(latestRoom.current.videoId, nextStatus, Number(player.getCurrentTime() || 0))
     }, 400)
     return () => {
       if (syncTimerRef.current) clearInterval(syncTimerRef.current)
     }
-  }, [isHost, room])
+  }, [isHost, hasRoom])
 
   useEffect(() => {
     const onVisibility = () => {
@@ -357,7 +385,6 @@ export default function App() {
             {hasCover ? (
               <img className="cover-art" src={coverThumb} alt="Current track" onError={() => setCoverBroken(true)} />
             ) : null}
-            <div className="player hidden-player" ref={playerHostRef}></div>
           </div>
           <div className="now-meta">
             <h2>{room.current?.title || 'Queue a song to start'}</h2>
@@ -389,7 +416,7 @@ export default function App() {
           <div className="list">
             {searchItems.map((item) => (
               <button key={item.videoId} className="list-item" onClick={() => addResolvedSong(item)}>
-                <img src={item.thumbnail} alt="" />
+                <img src={item.thumbnail || ''} alt="" onError={(e) => { e.target.style.display = 'none' }} />
                 <span>{item.title}</span>
               </button>
             ))}
@@ -405,7 +432,7 @@ export default function App() {
             {room.queue.length === 0 ? <p className="meta">Queue is empty</p> : null}
             {room.queue.map((item, index) => (
               <article key={item.id} className="queue-item">
-                <img src={item.thumbnail} alt="" />
+                <img src={item.thumbnail || ''} alt="" onError={(e) => { e.target.style.display = 'none' }} />
                 <div>
                   <p>{item.title}</p>
                   <small>by {item.addedBy}</small>
@@ -428,5 +455,13 @@ export default function App() {
 
       {status ? <p className="status">{status}</p> : null}
     </main>
+  )
+}
+
+export default function WrappedApp() {
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   )
 }

@@ -296,7 +296,7 @@ export class RoomDurableObject {
             this.room.current = item
             this.room.playback = { videoId: item.videoId, status: 'paused', positionSec: 0, updatedAt: Date.now() }
           } else {
-            this.room.queue.unshift(item)
+            this.room.queue.push(item)
           }
         }
 
@@ -323,7 +323,7 @@ export class RoomDurableObject {
         if (msg.type === 'player:next' && isHost) {
           const next = this.room.queue.shift() || null
           this.room.current = next
-          this.room.playback = { videoId: next?.videoId || null, status: 'paused', positionSec: 0, updatedAt: Date.now() }
+          this.room.playback = { videoId: next?.videoId || null, status: next ? 'playing' : 'paused', positionSec: 0, updatedAt: Date.now() }
         }
 
         if (msg.type === 'playback:update' && isHost) {

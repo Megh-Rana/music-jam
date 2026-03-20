@@ -1,8 +1,20 @@
+.entry-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
 .entry-screen,
 .app-shell {
   min-height: 100vh;
   padding: 24px;
   color: #f3eff6;
+}
+
+.entry-topbar {
+  width: 100%;
+  text-align: center;
 }
 
 .entry-topbar h1,
@@ -17,6 +29,7 @@
 .entry-hero {
   margin-top: 44px;
   max-width: 860px;
+  text-align: center;
 }
 
 .entry-hero h2 {
@@ -100,6 +113,7 @@ button {
 
 .cover-wrap {
   aspect-ratio: 1;
+  max-height: 320px;
   background: #25252b;
   position: relative;
   overflow: hidden;
