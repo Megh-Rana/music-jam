@@ -41,10 +41,15 @@ export default function App() {
   const [searchEnabled, setSearchEnabled] = useState(false)
   const [loadingSearch, setLoadingSearch] = useState(false)
   const [status, setStatus] = useState('')
+  const [coverBroken, setCoverBroken] = useState(false)
 
   const isHost = room && clientId && room.hostId === clientId
   const membersLabel = useMemo(() => (room ? `${room.members.length} live` : ''), [room])
   const coverThumb = room?.current?.thumbnail || ''
+
+  useEffect(() => {
+    setCoverBroken(false)
+  }, [room?.current?.videoId])
 
   useEffect(() => {
     roomRef.current = room
@@ -246,6 +251,16 @@ export default function App() {
     }
   }
 
+  const addRecommendedBatch = () => {
+    const picks = recommendations.slice(0, 5)
+    if (picks.length === 0) {
+      setStatus('No recommendations available yet.')
+      return
+    }
+    for (const song of picks) addResolvedSong(song)
+    setStatus(`Added ${picks.length} recommended songs.`)
+  }
+
   const hostTogglePlayback = () => {
     if (!isHost || !room?.current) return
     const player = playerRef.current
@@ -300,7 +315,9 @@ export default function App() {
       <section className="player-grid">
         <article className="now-playing">
           <div className="cover-wrap">
-            {coverThumb ? <img className="cover-art" src={coverThumb} alt="Current track" /> : <div className="cover-art fallback" />}
+            {coverThumb && !coverBroken
+              ? <img className="cover-art" src={coverThumb} alt="Current track" onError={() => setCoverBroken(true)} />
+              : <div className="cover-art fallback" />}
             <div className="player hidden-player" ref={playerHostRef}></div>
           </div>
           <h2>{room.current?.title || 'Queue a song to start'}</h2>
@@ -315,61 +332,54 @@ export default function App() {
           ) : null}
         </article>
 
-        <article className="search-panel">
-          <h3>Find Your Sound</h3>
-          <div className="search-row">
-            <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Track, artist, or genre" />
-            <button onClick={searchSongs} disabled={loadingSearch || !searchEnabled}>{loadingSearch ? '...' : 'Search'}</button>
+        <section className="queue-section">
+          <div className="queue-head">
+            <h3>Up Next</h3>
+            <div className="add-inline">
+              <input value={songInput} onChange={(e) => setSongInput(e.target.value)} placeholder="Paste YouTube URL or ID" />
+              <button onClick={addByUrl}>Add</button>
+            </div>
           </div>
-          <div className="list">
-            {searchItems.map((item) => (
-              <button key={item.videoId} className="list-item" onClick={() => addResolvedSong(item)}>
+          <div className="queue-list">
+            {room.queue.length === 0 ? <p className="meta">Queue is empty</p> : null}
+            {room.queue.map((item, index) => (
+              <article key={item.id} className="queue-item">
                 <img src={item.thumbnail} alt="" />
-                <span>{item.title}</span>
-              </button>
-            ))}
-          </div>
-
-          <h3>Recommendations</h3>
-          <div className="list">
-            {recommendations.map((item) => (
-              <button key={`rec-${item.videoId}`} className="list-item" onClick={() => addResolvedSong(item)}>
-                <img src={item.thumbnail} alt="" />
-                <span>{item.title}</span>
-              </button>
-            ))}
-          </div>
-        </article>
-      </section>
-
-      <section className="queue-section">
-        <div className="queue-head">
-          <h3>Up Next</h3>
-          <div className="add-inline">
-            <input value={songInput} onChange={(e) => setSongInput(e.target.value)} placeholder="Paste YouTube URL or ID" />
-            <button onClick={addByUrl}>Add</button>
-          </div>
-        </div>
-        <div className="queue-list">
-          {room.queue.length === 0 ? <p className="meta">Queue is empty</p> : null}
-          {room.queue.map((item, index) => (
-            <article key={item.id} className="queue-item">
-              <img src={item.thumbnail} alt="" />
-              <div>
-                <p>{item.title}</p>
-                <small>by {item.addedBy}</small>
-              </div>
-              {isHost ? (
+                <div>
+                  <p>{item.title}</p>
+                  <small>by {item.addedBy}</small>
+                </div>
                 <div className="item-controls">
                   <button onClick={() => send({ type: 'queue:move', from: index, to: index - 1 })}>↑</button>
                   <button onClick={() => send({ type: 'queue:move', from: index, to: index + 1 })}>↓</button>
                   <button onClick={() => send({ type: 'queue:remove', id: item.id })}>✕</button>
                 </div>
-              ) : null}
-            </article>
+              </article>
+            ))}
+          </div>
+        </section>
+      </section>
+
+      <article className="search-panel">
+        <h3>Find Your Sound</h3>
+        <div className="search-row">
+          <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Track, artist, or genre" />
+          <button onClick={searchSongs} disabled={loadingSearch || !searchEnabled}>{loadingSearch ? '...' : 'Search'}</button>
+        </div>
+        <div className="list">
+          {searchItems.map((item) => (
+            <button key={item.videoId} className="list-item" onClick={() => addResolvedSong(item)}>
+              <img src={item.thumbnail} alt="" />
+              <span>{item.title}</span>
+            </button>
           ))}
         </div>
-      </section>
+
+        <div className="recommend-strip">
+          <p>Recommendations ready: {recommendations.length}</p>
+          <button onClick={addRecommendedBatch}>Add Recommended Mix</button>
+        </div>
+      </article>
 
       {status ? <p className="status">{status}</p> : null}
     </main>
