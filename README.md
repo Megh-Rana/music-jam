@@ -40,3 +40,8 @@ Server (`server/.env`):
 
 - `PORT=4000`
 - `YOUTUBE_API_KEY=...` (optional but needed for search/recommendations)
+- `ENABLE_YTDLP=false`
+
+## yt-dlp branch notes
+
+On branch `yt-dlp`, set `ENABLE_YTDLP=true` and make sure `yt-dlp` is installed on the server machine. This mode is intended for personal/private use.

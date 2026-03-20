@@ -3,6 +3,8 @@ import express from 'express'
 import cors from 'cors'
 import axios from 'axios'
 import { createServer } from 'node:http'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { Server } from 'socket.io'
 import { customAlphabet } from 'nanoid'
 
@@ -16,7 +18,9 @@ const io = new Server(httpServer, {
 
 const PORT = Number(process.env.PORT || 4000)
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || ''
+const ENABLE_YTDLP = String(process.env.ENABLE_YTDLP || 'false').toLowerCase() === 'true'
 const nanoid = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6)
+const execFileAsync = promisify(execFile)
 
 app.use(cors())
 app.use(express.json())
@@ -43,10 +47,12 @@ function parseVideoId(input) {
   return null
 }
 
-function createRoom(hostSocketId, hostName) {
+function createRoom(hostSocketId, hostName, mode) {
   const roomCode = nanoid()
+  const safeMode = mode === 'extract' && ENABLE_YTDLP ? 'extract' : 'embed'
   const room = {
     roomCode,
+    mode: safeMode,
     hostId: hostSocketId,
     members: [{ id: hostSocketId, name: hostName }],
     queue: [],
@@ -65,6 +71,7 @@ function createRoom(hostSocketId, hostName) {
 function serializeRoom(room) {
   return {
     roomCode: room.roomCode,
+    mode: room.mode,
     hostId: room.hostId,
     members: room.members,
     queue: room.queue,
@@ -117,7 +124,7 @@ app.get('/health', (req, res) => {
 })
 
 app.get('/config', (req, res) => {
-  res.json({ searchEnabled: Boolean(YOUTUBE_API_KEY) })
+  res.json({ searchEnabled: Boolean(YOUTUBE_API_KEY), extractionEnabled: ENABLE_YTDLP })
 })
 
 app.get('/api/search', async (req, res) => {
@@ -194,10 +201,44 @@ app.post('/api/resolve', async (req, res) => {
   }
 })
 
+app.post('/api/extract', async (req, res) => {
+  if (!ENABLE_YTDLP) {
+    return res.status(400).json({ error: 'Extraction mode is disabled on server' })
+  }
+
+  const videoId = parseVideoId(String(req.body?.videoId || req.body?.input || ''))
+  if (!videoId) return res.status(400).json({ error: 'Invalid videoId' })
+
+  try {
+    const { stdout } = await execFileAsync(
+      'yt-dlp',
+      [
+        '-f',
+        'bestaudio[ext=m4a]/bestaudio',
+        '--dump-single-json',
+        `https://www.youtube.com/watch?v=${videoId}`,
+      ],
+      { timeout: 20000, maxBuffer: 1024 * 1024 * 6 },
+    )
+    const info = JSON.parse(stdout)
+    if (!info?.url) {
+      return res.status(500).json({ error: 'Failed to extract stream URL' })
+    }
+    res.json({
+      videoId,
+      title: info.title || 'Unknown title',
+      thumbnail: info.thumbnail || '',
+      streamUrl: info.url,
+    })
+  } catch {
+    res.status(500).json({ error: 'yt-dlp extraction failed' })
+  }
+})
+
 io.on('connection', (socket) => {
-  socket.on('room:create', ({ name }, cb) => {
+  socket.on('room:create', ({ name, mode }, cb) => {
     const safeName = String(name || 'Guest').slice(0, 24)
-    const room = createRoom(socket.id, safeName)
+    const room = createRoom(socket.id, safeName, mode)
     socket.join(room.roomCode)
     cb?.({ ok: true, room: serializeRoom(room), clientId: socket.id })
   })
