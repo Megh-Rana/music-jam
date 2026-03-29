@@ -7,3 +7,10 @@ client/dist/
 server/.env
 server/.dev.vars
 server/.wrangler/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
